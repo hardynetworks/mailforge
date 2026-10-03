@@ -1,0 +1,71 @@
+x-app: &app
+  build: .
+  restart: unless-stopped
+  env_file: .env
+  environment: &env
+    DATABASE_URL: postgres://mailforge:${POSTGRES_PASSWORD}@postgres:5432/mailforge
+    REDIS_URL: redis://redis:6379
+    PUBLIC_URL: https://${MAIL_HOSTNAME}
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_started }
+
+services:
+  web:
+    <<: *app
+    command: node dist/web/server.js
+
+  worker:
+    <<: *app
+    command: node dist/worker.js
+
+  smtp:
+    <<: *app
+    command: node dist/smtp.js
+    ports:
+      - "25:2525"     # inbound: bounces / feedback loops
+      - "587:5870"    # submission (STARTTLS)
+      - "465:4650"    # submission (implicit TLS)
+    environment:
+      <<: *env
+      SMTP_INBOUND_PORT: 2525
+      SMTP_SUBMISSION_PORT: 5870
+      SMTP_TLS_PORT: 4650
+      SMTP_TLS_CERT: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${MAIL_HOSTNAME}/${MAIL_HOSTNAME}.crt
+      SMTP_TLS_KEY: /caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${MAIL_HOSTNAME}/${MAIL_HOSTNAME}.key
+    volumes:
+      - caddy_data:/caddy-data:ro
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mailforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: mailforge
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+
+volumes: { pgdata: {}, redisdata: {}, caddy_data: {}, caddy_config: {} }

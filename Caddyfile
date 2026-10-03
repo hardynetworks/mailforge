@@ -1,0 +1,5 @@
+# Automatic HTTPS for the dashboard/API. The same certificate is reused for SMTP STARTTLS.
+{$MAIL_HOSTNAME} {
+	encode gzip
+	reverse_proxy web:3000
+}
