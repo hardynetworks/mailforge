@@ -117,18 +117,33 @@ function start(server: SMTPServer, port: number, label: string) {
   server.listen(port, '0.0.0.0', () => console.log(`[smtp] ${label} listening on :${port}`));
 }
 
-const tls = loadTls();
-if (!tls && !config.allowInsecureSmtpAuth)
-  console.warn('[smtp] No TLS certificate found: SMTP submission will reject AUTH. Set SMTP_TLS_CERT/SMTP_TLS_KEY (or ALLOW_INSECURE_SMTP_AUTH=true for testing).');
-
-const sub = submissionServer(false, tls);
-start(sub, config.smtpSubmissionPort, 'submission/STARTTLS');
-if (tls) {
-  const subTls = submissionServer(true, tls);
-  start(subTls, config.smtpTlsPort, 'submission/TLS');
-  setInterval(() => {
-    const t = loadTls();
-    if (t) for (const s of [sub, subTls]) s.updateSecureContext(t);
-  }, 12 * 3600 * 1000).unref();
+async function main() {
+  let tls = loadTls();
+  // On first boot Caddy may not have obtained the Let's Encrypt certificate yet: wait for it instead of running without TLS.
+  if (!tls && !config.allowInsecureSmtpAuth && config.smtpTlsCert) {
+    console.warn(`[smtp] waiting for TLS certificate at ${config.smtpTlsCert} (Caddy issues it after DNS points here and ports 80/443 are reachable)...`);
+    start(inboundServer(), config.smtpInboundPort, 'inbound (bounces)'); // bounces don't need TLS
+    while (!tls) { await new Promise((r) => setTimeout(r, 10_000)); tls = loadTls(); }
+    console.log('[smtp] TLS certificate found');
+    return startSubmission(tls, false);
+  }
+  if (!tls && !config.allowInsecureSmtpAuth)
+    console.warn('[smtp] No TLS certificate configured: SMTP submission will reject AUTH. Set SMTP_TLS_CERT/SMTP_TLS_KEY (or ALLOW_INSECURE_SMTP_AUTH=true for testing).');
+  startSubmission(tls, true);
 }
-start(inboundServer(), config.smtpInboundPort, 'inbound (bounces)');
+
+function startSubmission(tls: ReturnType<typeof loadTls>, withInbound: boolean) {
+  const sub = submissionServer(false, tls);
+  start(sub, config.smtpSubmissionPort, 'submission/STARTTLS');
+  if (tls) {
+    const subTls = submissionServer(true, tls);
+    start(subTls, config.smtpTlsPort, 'submission/TLS');
+    setInterval(() => {
+      const t = loadTls();
+      if (t) for (const s of [sub, subTls]) s.updateSecureContext(t);
+    }, 12 * 3600 * 1000).unref();
+  }
+  if (withInbound) start(inboundServer(), config.smtpInboundPort, 'inbound (bounces)');
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

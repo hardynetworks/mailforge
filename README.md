@@ -18,6 +18,8 @@ Self-hosted email platform in the spirit of Brevo / Mailjet, packaged for Docker
 
 ## Deploy
 
+Production walkthrough with Cloudflare DNS, an installer script and a health check: **[DEPLOY.md](DEPLOY.md)**. Quick version:
+
 You need a VPS with Docker + Compose, and (for direct delivery) **outbound port 25 open** — AWS, GCP, Azure and many others block it by default. If yours does, set `SMTP_RELAY_URL` and MailForge will hand mail to your relay instead.
 
 ```bash
